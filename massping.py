@@ -1,53 +1,77 @@
 import requests
-import random
 import time
+import random
+import threading
 
-# Load tokens
+# Load tokens from file
 with open("usertokens.txt", "r") as f:
     tokens = [line.strip() for line in f if line.strip()]
 
 if not tokens:
-    print("No tokens found in usertokens.txt!")
+    print("No tokens found in usertokens.txt")
     exit()
 
-# User inputs
-channel_id = input("Enter the target channel ID: ")
-message = input("Enter the spam message: ")
+# User input
+channel_id = input("Enter the Channel ID to spam: ")
+message = input("Enter the message to spam: ")
 ping_count = int(input("How many users to ping per message? "))
-repeat = 300  # Messages to send
 
-headers = [{"Authorization": token} for token in tokens]
-
-# Fetch server members (to get random users for pings)
-def get_members(token):
+def get_random_users(channel_id, token):
     headers = {"Authorization": token}
-    guild_id = input("Enter the server (guild) ID: ")
-    response = requests.get(f"https://discord.com/api/v9/guilds/{guild_id}/members?limit=1000", headers=headers)
+    response = requests.get(f"https://discord.com/api/v9/channels/{channel_id}/messages", headers=headers)
+    
     if response.status_code == 200:
-        return [member["user"]["id"] for member in response.json()]
+        users = set()
+        messages = response.json()
+        for msg in messages:
+            if "author" in msg:
+                users.add(msg["author"]["id"])
+        return list(users)
     else:
-        print("Failed to fetch members! Status:", response.status_code)
         return []
 
-# Choose a token to fetch members
-random_token = random.choice(tokens)
-members = get_members(random_token)
-if not members:
-    print("No members fetched!")
-    exit()
+def send_spam(token):
+    headers = {
+        "Authorization": token,
+        "Content-Type": "application/json"
+    }
+    
+    users = get_random_users(channel_id, token)
+    if not users:
+        print("Failed to fetch users. Using default mentions.")
+        users = ["@everyone"]
 
-# Spam messages
-for i in range(repeat):
-    token = random.choice(tokens)
-    headers = {"Authorization": token}
-    random_pings = " ".join([f"<@{random.choice(members)}>" for _ in range(ping_count)])
-    data = {"content": f"{random_pings} {message}"}
-    
-    response = requests.post(f"https://discord.com/api/v9/channels/{channel_id}/messages", json=data, headers=headers)
-    
-    if response.status_code == 200:
-        print(f"[{i+1}/{repeat}] Sent: {data['content']}")
-    else:
-        print(f"Failed to send message. Status: {response.status_code}, Response: {response.text}")
-    
-    time.sleep(1)  # Prevents hitting rate limits too fast
+    for _ in range(300):  # Spam 300 messages
+        random.shuffle(users)
+        mentions = " ".join([f"<@{user}>" for user in users[:ping_count]])
+        final_message = f"{mentions} {message}"
+        
+        # Simulate typing
+        typing_url = f"https://discord.com/api/v9/channels/{channel_id}/typing"
+        requests.post(typing_url, headers=headers)
+        time.sleep(random.uniform(2, 4))  # Random delay for typing effect
+        
+        # Send message
+        json_data = {"content": final_message}
+        response = requests.post(f"https://discord.com/api/v9/channels/{channel_id}/messages", headers=headers, json=json_data)
+        
+        if response.status_code == 200:
+            print(f"Message sent: {final_message}")
+        elif response.status_code == 429:
+            retry_after = response.json().get("retry_after", 5)
+            print(f"Rate limited! Retrying after {retry_after} seconds...")
+            time.sleep(retry_after)
+        else:
+            print(f"Failed to send message: {response.text}")
+        
+        time.sleep(random.uniform(3, 6))  # Random delay between messages
+
+# Start spam threads
+threads = []
+for token in tokens:
+    thread = threading.Thread(target=send_spam, args=(token,))
+    thread.start()
+    threads.append(thread)
+
+for thread in threads:
+    thread.join()
